@@ -1,0 +1,220 @@
+include:
+  - project: 'strykercorp/robotics/darlin/templates'
+    ref: main
+    file: '/perforce.yml'
+
+stages:
+  - prepare
+  - checkout
+  - test
+  - changelist_code_stage
+  - changelist_data_stage
+  - checkout_code_stage
+  - quality-gate
+  - checkout_data_stage
+  - build
+  - cleanup
+  - tests
+  - deploy
+  - post
+
+
+variables:
+  OSEP_SYNOPSYS_DETECT_WITH_DOCKER: "false"
+  OSEP_SYNOPSYS_DETECT_TOOLS_EXCLUDED: "NONE"
+  OSEP_SYNOPSYS_DETECT_INVENTORY_DISABLED: "true"
+
+  container_name: "checkout_code"
+  changelist_file: "changelist_code.txt"
+  client_name: "${CI_PROJECT_NAME}_code_linux"
+  workdir: "/modules/perforce" 
+
+  perforce_image: "artifactory.osep.stryker.com/robotics-docker-dev/voyager/voyager-perforce:0.0.17-windows"
+  perforce_image_linux: "artifactory.osep.stryker.com/robotics-docker-dev/voyager/voyager-perforce:0.0.14-ubuntu-20.04"
+  P4_STREAM:
+      value: "//navigation/thor-hip2.0_release"
+      description: "Perforce stream"
+  BUILD_PROJECT:
+      value: "thor_cthip"
+      options:
+        - "thor_cthip"
+        - "thor_ctknee"
+        - "Knee1.0"
+        - "knee1.0-sonar"
+      description: "Select OS for the build"
+  BUILD_OS: "windows"
+
+build:
+  stage: build
+  timeout: 4h
+  variables:
+    GIT_STRATEGY:                   clone
+    GIT_SUBMODULE_STRATEGY:         recursive
+    container_name: "checkout_code"
+    changelist_file: "changelist_code.txt"
+    client_name: "${CI_PROJECT_NAME}_code123"
+    workdir: "C:/src"
+  tags:
+    - docker-for-windows
+    - stryker
+  script:
+    #systeminfo
+    - systeminfo
+    - echo "" > changelist_code.txt
+    - mkdir workspace
+    - ls
+    - docker login --username ${ARTIFACTORY_STRYKER_USER} --password ${ARTIFACTORY_STRYKER_KEY} artifactory.osep.stryker.com
+    - docker run --rm --name=${container_name} -v ${CI_PROJECT_DIR}:${workdir} -w "${workdir}/modules/perforce" -e PYTHONDONTWRITEBYTECODE=1 --entrypoint=python -t ${perforce_image} checkout.py --p4port ${P4PORT} --p4user ${P4USER} --p4passwd ${P4PASSWD} --stream ${P4_STREAM} --dest c:/src/workspace --name ${client_name} --output /src/changelist_code.txt
+    - cd "$CI_PROJECT_DIR/workspace"
+    - cp ../build.bat .
+    - docker-compose  --verbose  -f docker-compose.linux.yml -p release-build run -e project=./start_thor_ctknee.py  -e build_type=release -e build_dir=c:\\build_thor -e target=win64-vc16-qt5-15-10   --rm --entrypoint="c:/temp/build.bat" msvc16-qt
+  after_script:
+    - docker network rm release-build_default
+    - cd $CI_PROJECT_DIR
+    - docker run --rm  -v ${CI_PROJECT_DIR}:${workdir} -w "${workdir}/modules/perforce" -e PYTHONDONTWRITEBYTECODE=1 --entrypoint=python -t ${perforce_image} remove_client.py --p4port ${P4PORT} --p4user ${P4USER} --p4passwd ${P4PASSWD} --p4client ${client_name}
+    #- Remove-Item -Path "$CI_PROJECT_DIR/workspace/" -Recurse -Force
+  rules:
+   - if: '$BUILD_PROJECT != "Knee1.0" && $BUILD_PROJECT != "knee1.0-sonar"'
+
+knee1-0_build:
+  stage: build
+  timeout: 4h
+  variables:
+    GIT_STRATEGY:                   clone
+    GIT_SUBMODULE_STRATEGY:         recursive
+    container_name: "checkout_code"
+    changelist_file: "changelist_code.txt"
+    client_name: "${CI_PROJECT_NAME}_${$CI_PIPELINE_ID}"
+    workdir: "C:/src"
+    P4_STREAM: "//navigation/thor-knee1.0_release"
+    build_image: "artifactory.osep.stryker.com/docker-dev/qbs-build-tools:windows-python-2.7.16.qt5-15-10.vc16.qtc-4.14.3__10.0.20348.1006"
+    
+    run_Sonar: "False"
+  tags:
+    - docker-for-windows
+    - stryker
+    - ltsc2022
+  script:
+    - systeminfo
+    - echo "" > changelist_code.txt
+    - mkdir workspace
+    - docker login --username ${ARTIFACTORY_STRYKER_USER} --password ${ARTIFACTORY_STRYKER_KEY} artifactory.osep.stryker.com
+    - docker run --rm --name=${container_name} -v ${CI_PROJECT_DIR}:${workdir} -w "${workdir}/modules/perforce" -e PYTHONDONTWRITEBYTECODE=1 --entrypoint=python -t ${perforce_image} checkout.py --p4port ${P4PORT} --p4user ${P4USER} --p4passwd ${P4PASSWD} --stream ${P4_STREAM} --dest c:/src/workspace --name ${client_name} --output /src/changelist_code.txt
+    - cd "$CI_PROJECT_DIR/workspace"
+    - cp ../build-knee1-0.bat .
+    - |
+      if ( ${env:BUILD_PROJECT} -eq "knee1.0-sonar" ) {
+        ${env:run_Sonar} = "True"
+      } 
+    - docker run --rm -v "${PWD}:C:/temp" -e run_Sonar -e SONAR_AUTH_TOKEN -e project=start_thor_ctknee.py  -e build_type=release -e build_dir=c:\\build_thor -e target=win64-vc16-qt5-15-10 -e buildflag="project.productionBuild:true"  --entrypoint="C:/temp/build-knee1-0.bat" ${build_image}
+    - |
+      if ( ${env:BUILD_PROJECT} -eq "knee1.0-sonar" ) {
+        exit 0
+      } 
+    - cd ..
+    - docker run --rm -v "${PWD}:C:/temp" -w "C:/temp" artifactory.osep.stryker.com/osep-docker-dev/strykercorp/osep/osep-build-tools/osep-cpp-build-tools:0.1.56-msvc15-server-ltsc2022 powershell.exe -NoLogo -ExecutionPolicy Bypass -f ./installer_gen.ps1
+    # Create install-root ZIP inside container
+    - |
+      docker run --rm -v "${PWD}:C:/temp" ${build_image} powershell -Command "if (Test-Path 'C:\temp\install-root') { Compress-Archive -Path 'C:\temp\install-root\*' -DestinationPath 'C:\temp\install-root.zip' -Force; Write-Host 'install-root.zip created' } else { Write-Error 'install-root folder not found'; exit 1 }"
+    # Upload install-root ZIP to Artifactory
+    - |
+      curl.exe -u "${ARTIFACTORY_STRYKER_USER}:${ARTIFACTORY_STRYKER_KEY}" `
+      -T "$CI_PROJECT_DIR\install-root.zip" `
+      "https://artifactory.osep.stryker.com/artifactory/robotics-maven-dev/tmp/$env:CI_PIPELINE_ID/install-root.zip"
+    # # Upload ZIP to Artifactory
+    # - echo "Searching for generated ZIP..."
+    # - |
+    #   $zipFile = Get-ChildItem "$CI_PROJECT_DIR\artifact_location" -Recurse -Filter *.zip | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+      
+    #   if (-not $zipFile) {
+    #       Write-Error "ZIP file not found!"
+    #       exit 1
+    #   }
+      
+    #   Write-Host "Uploading $($zipFile.FullName) to Artifactory..."
+    #   $uploadPath = "tmp/$env:CI_PIPELINE_ID/$($zipFile.Name)"
+    #   curl.exe -u "${ARTIFACTORY_STRYKER_USER}:${ARTIFACTORY_STRYKER_KEY}" `
+    #   -T "$($zipFile.FullName)" `
+    #   "https://artifactory.osep.stryker.com/artifactory/robotics-maven-dev/$uploadPath"
+    #    "https://artifactory.osep.stryker.com/artifactory/robotics-maven-dev/tmp/$($zipFile.Name)"
+    #- docker run --rm -v "${PWD}:C:/temp" -e project=start_patient_directory.py -e build_type=release -e build_dir=c:\\build_thor -e target=win64-vc16-qt5-15-8 -e buildflag="project.productionBuild:true"  --entrypoint="C:/temp/build-knee1-0.bat" ${build_image}
+  after_script:
+    #- docker network rm release-build_default
+    - cd $CI_PROJECT_DIR
+    - docker run --rm  -v ${CI_PROJECT_DIR}:${workdir} -w "${workdir}/modules/perforce" -e PYTHONDONTWRITEBYTECODE=1 --entrypoint=python -t ${perforce_image} remove_client.py --p4port ${P4PORT} --p4user ${P4USER} --p4passwd ${P4PASSWD} --p4client ${client_name}
+    #- Remove-Item -Path "$CI_PROJECT_DIR/workspace/" -Recurse -Force
+  rules:
+   - if: '$BUILD_PROJECT == "Knee1.0" || $BUILD_PROJECT == "knee1.0-sonar"'
+
+clone-cthip1.0-Master-Windows:
+  tags:
+    #- Vivek-Laptop
+    #- SGTC-Linux-Laptop
+    - docker-for-windows
+    - stryker
+    - ltsc2022
+  timeout: 4h
+  variables:
+    workdir:             C:/src
+    #docker_clone_image: artifactory.osep.stryker.com/osep-docker-dev/strykercorp/osep/osep-build-tools/osep-cpp-build-tools:0.1.26-msvc15-servercore-ltsc2022
+    docker_build_image: artifactory.osep.stryker.com/robotics-docker-dev/voyager/voyager-stp-ci:0.0.14-msvcqt-16
+    docker_clone_image:  artifactory.osep.stryker.com/osep-docker-dev/strykercorp/osep/osep-cpp-build-tools:0.1.26-msvc15-windows-ltsc2019
+  script:
+    - docker login --username ${ARTIFACTORY_STRYKER_USER} --password ${ARTIFACTORY_STRYKER_KEY} artifactory.osep.stryker.com
+    #- ./perforce_clone.ps1
+    #- docker run --rm -w ${workdir} -v ${CI_PROJECT_DIR}:${workdir} -e P4USER=${P4USER} -e P4PASSWD=${P4PASSWD} ${docker_clone_image}  pip install P4Python; python perforce_clone.py
+    - docker run --rm -w ${workdir} -v ${CI_PROJECT_DIR}:${workdir} -e P4USER=${P4USER} -e P4PASSWD=${P4PASSWD} ${docker_clone_image} powershell.exe -NoLogo -ExecutionPolicy Bypass -f .\perforce_clone.ps1
+    - cd "$CI_PROJECT_DIR/workspace"
+    - cp ../build.bat .
+    - docker-compose  --verbose  -f docker-compose.linux.yml -p release-build run -e project=./start_thor_ctknee.py  -e build_type=release -e build_dir=c:\\build_thor -e target=win64-vc16-qt5-15-10   --rm --entrypoint="c:/temp/build.bat" msvc16-qt
+    - docker network rm release-build_default
+  after_script:
+    - Remove-Item -Path "$CI_PROJECT_DIR/workspace/" -Recurse -Force
+  rules:
+    - when: never
+
+clone-cthip1.0-Master-Linux:
+  tags:
+    #- SGTC-Linux-Laptop
+    - linux
+    - stryker
+    - docker-for-windows
+  variables:
+    gitlabDockerPerforce:  "gitlab-darlin_perforce"
+    workdir:             c:/src
+    buildToolsImage: "artifactory.osep.stryker.com/robotics-docker-dev/voyager/voyager-perforce:0.0.13-ubuntu-20.04"
+    #docker_build_image:  artifactory.osep.stryker.com/osep-docker-dev/strykercorp/osep/osep-cpp-build-tools:0.1.26-msvc15-windows-ltsc2019
+  script:
+    #- p4 changes -m 1 $STREAM
+    #- CHANGELIST_NUM=$(p4 changes -m 1 $STREAM | awk '{print $2}')
+    #- echo $CHANGELIST_NUM
+    #- p4 sync $STREAM > log.txt
+    - P4PORT=fri4proxy01.strykercorp.com:1999
+    - echo "$P4PORT"
+    - export docksLinuxUserId=$UID
+    - echo $docksLinuxUserId
+    - export docksLinuxGroupID=$(eval id -rg)
+    - echo "docksLinuxGroupID" $docksLinuxGroupID
+    - |-
+      if [ "$( docker container inspect -f '{{.State.Status}}' $gitlabDockerPerforce )" = "exited" ]; then
+        echo "XXXXXXXXXXXXXXXX DOCKER IS Exited, REMOVE"
+        docker rm -f $gitlabDockerPerforce
+      fi 
+
+    - |-
+      if [ "$( docker container inspect -f '{{.State.Running}}' $gitlabDockerPerforce )" = "true" ]; then
+        echo "XXXXXXXXXXXXXXXX DOCKER IS RUNNING, STOP AND REMOVE"
+        docker stop $gitlabDockerPerforce; docker rm $gitlabDockerPerforce
+      fi 
+
+    - docker login --username ${ARTIFACTORY_STRYKER_USER} --password ${ARTIFACTORY_STRYKER_KEY} artifactory.osep.stryker.com/robotics-docker-dev
+    - docker run --name $gitlabDockerPerforce -t -d --user $UID:$docksLinuxGroupID -w ${workdir} -v ${CI_PROJECT_DIR}:${workdir} -e P4USER -e P4PASSWD  --entrypoint=cat ${buildToolsImage}
+    - pwd
+    - docker exec -t --user 0:0 -d $gitlabDockerPerforce bash -cv 'adduser -u $docksLinuxUserId dock-gitlab-runner'
+    - echo "XXXXXXXXXXXX START OF P4 COMMANDS! $(eval $curDate)"
+    - docker exec -t -d $gitlabDockerPerforce bash -cv 'echo $P4PASSWD | p4 login'
+    - chmod +x src/apps/stp/darlin/ci/build_linux.sh
+    - docker login --username ${ARTIFACTORY_STRYKER_USER} --password ${ARTIFACTORY_STRYKER_KEY} artifactory.osep.stryker.com
+    - docker-compose -f docker-compose.linux.yml run --user 1000:1000 -e execute_coverage=false -e project=./start_thor_cthip.py -e build_type=release -e build_dir=build -e build_spk=create_thor_cthip_spk -e target=win64-vc16-qt5-15-10  -e buildflag="project.productionBuild:false"  -e spkbuildflag="project.buildSPK:true"  --rm --entrypoint="/bin/bash -c ./src/apps/stp/darlin/ci/build_linux.sh" ubuntu-20-qt-6.x
+  rules:
+    - when: never

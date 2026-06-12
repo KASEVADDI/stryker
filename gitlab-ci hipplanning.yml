@@ -1,0 +1,574 @@
+#***********************************************************#
+#***   THIS DOCUMENT CONTAINS PROPRIETARY INFORMATION.   ***#
+#***    IT IS THE EXCLUSIVE CONFIDENTIAL PROPERTY OF     ***#
+#***       STRYKER CORPORATION AND ITS AFFILIATES.       ***#
+#***                                                     ***#
+#***             Copyright (C) 2020 Stryker              ***#
+#***********************************************************#
+
+####################################################################################################
+# GLOBAL VARIABLES
+####################################################################################################
+
+variables:
+    DOCKER_CLOUD_REGISTRY:        artifactory.osep.stryker.com
+    DOCKER_LINUX_ANNIE_IMAGE:     $DOCKER_CLOUD_REGISTRY/robotics-docker-dev/devops-tools:0.3.10
+    DOCKER_ON_PREMISE_REGISTRY:   fribar01.strykercorp.com:8081
+    DOCKER_LINUX_DOC_FILE:        docker/doc-tools.Dockerfile
+    DOCUMENTATION_FOLDER:         doxygen
+    DOCUMENTATION_OUTPUT_PATH:    $DOCUMENTATION_FOLDER/output
+    BUILD_INSTALL_FOLDER:         cpack
+    TEST_OUTPUT_FOLDER:           test_results
+    JUNIT_TEST_OUTPUT_PATH:       $TEST_OUTPUT_FOLDER/junit
+    CPPUNIT_TEST_OUTPUT_PATH:     $TEST_OUTPUT_FOLDER/cppunit
+    COVERAGE_OUTPUT_PATH:         code-analysis
+    ARCHITECTURE:                 x86_64
+    SYSTEM:                       windows
+    DOMAIN:                       com.strykercorp
+    DEFAULT_DEPLOY_STAGE:         snapshot
+    CONFIGURATION:                thor_planning
+    Build_Stage:
+      value: "Compilation"
+      options:
+        - "Compilation"
+        - "Production"
+        - "Engineering"
+      description: "Compilation(No installer generation), Engineering(Installer generation without Models), Production(Installer generation with Models)"
+
+####################################################################################################
+# Formula 3D hip Planning GITLAB CI PIPELINE
+####################################################################################################
+include:
+  - project: 'strykercorp/templates'
+    file: '/stryker.yml'
+  - project: strykercorp/osep/osep-pipelines
+    file: jobs/secrets/vault.gitlab-ci.yml
+    ref: v1
+
+
+# run coverage + sonarcloud in three cases:
+# - manually triggered
+# - merge train pipelines, i.e. after somebody clicked the merge button
+# - merged result pipelines, i.e. the MR is not in Draft state anymore
+
+stages:
+  - Check tag
+  - prepare
+  - Coverage
+  - Build and Test
+  - Create Documentation
+  - Deploy in Cloud
+  - Deploy on Premise
+  - Publish Documentation
+
+CHECK_TAG:
+  stage: Check tag
+  image: artifactory.osep.stryker.com/robotics-docker-dev/gitlabtools:latest
+  tags:
+    - linux
+  variables:
+    GIT_STRATEGY: clone
+  script:
+    - sh ${CI_PROJECT_DIR}/check_tag_version.sh ${CI_COMMIT_TAG}
+  rules:
+    - if: '$CI_COMMIT_TAG'
+
+vault:
+  rules:
+    - if: $CI_MERGE_REQUEST_ID
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_BRANCH =~ /.+[_-]ci$/i  # commit branch name ends with "_ci/-ci" (case-insensitive)
+    - if: $CI_COMMIT_BRANCH =~ /^release\/.*$/
+    - if: $CI_COMMIT_BRANCH =~ /.*Sprint.*/
+    - if: $CI_COMMIT_BRANCH =~ "/^HPL_Development.*/"
+    - if: $CI_COMMIT_BRANCH =~ "/^HPL_Blackwell_Support.*/"
+
+####################################################################################################
+# WINDOWS Coverage
+####################################################################################################
+
+hip-planning-coverage:
+  extends: .build-on-windows-template
+  stage: Coverage
+  variables:
+    config: ${CONFIGURATION}
+    with_coverage: "True"
+    with_package: "True"
+  artifacts:
+    name: "$coverge-data-$CI_COMMIT_SHORT_SHA"
+    paths:
+      - $COVERAGE_OUTPUT_PATH/
+  rules:
+    - if: '$CI_MERGE_REQUEST_EVENT_TYPE == "merged_result" || $CI_MERGE_REQUEST_EVENT_TYPE == "merge_train"'
+    - if: $CI_COMMIT_BRANCH == "master"
+    - if: $CI_COMMIT_BRANCH =~ /^release\/.*$/
+    - if: $WITH_COVERAGE
+    - when: never
+
+
+####################################################################################################
+# WINDOWS BUILDS AND TESTS
+####################################################################################################
+hipplanning-docker-build:
+  stage: Build and Test
+  tags:
+    - docker-windows
+    - stryker
+  timeout: 4h
+  variables:
+    config:                         ${CONFIGURATION}
+    GIT_STRATEGY:                   clone
+    GIT_SUBMODULE_STRATEGY:         recursive
+    build_dir:                      c:/build
+    build_type:                     release
+    compiler:                       msvc15
+    link_type:                      shared
+    with_coverage:                  "False"
+    with_package:                   "True"
+    with_sonar_scanner:             "False"
+    with_tests:                     "False"
+    with_models:                    "False"
+    #docker_build_image:             artifactory.osep.stryker.com/osep-docker-dev/strykercorp/osep/osep-build-tools/osep-cpp-build-tools:msvc15-server-ltsc2022-annie
+    is_ci_build:                    1
+    git_commit:                     ${CI_COMMIT_SHORT_SHA}
+    git_branch:                     ${CI_COMMIT_BRANCH}
+    imageproclib_test_output_file:  ${CI_PROJECT_DIR}/${CPPUNIT_TEST_OUTPUT_PATH}/imageproclib_ext.test.results.xml
+    workdir:                        c:/src
+    installer_base_name:            "OS3DHipPlanningSetup"
+    artifactory_url:                https://artifactory.osep.stryker.com
+    artifactory_hpl_repo:           robotics-maven-dev/com/strykercorp/windows/x86_64/Hip_Planning
+    architecture:                   ${ARCHITECTURE}
+    USR:                            ${ARTIFACTORY_STRYKER_USER} 
+    PSSWD:                          ${ARTIFACTORY_STRYKER_KEY} 
+  dependencies:
+    - vault
+  image: artifactory.osep.stryker.com/osep-docker-dev/strykercorp/osep/osep-build-tools/osep-cpp-build-tools:msvc15-server-ltsc2022-annie
+  script:
+    #! powershell
+    - |
+      Write-Host "Build_stages set to ${env:Build_Stage}"
+      if ( ${env:Build_Stage} -eq "Production" ) {
+        ${env:with_package} = "True"
+        ${env:with_models} = "True" 
+      } elseif ( ${env:Build_Stage} -eq "Engineering" ) {
+        ${env:with_package} = "True"
+      }
+      Write-Host "with_package: ${env:with_package} and  with_models: ${env:with_models}"
+    - $version = Get-Content -Path ${CI_PROJECT_DIR}/VERSION -TotalCount 1
+    - Write-Host "building ${config}, version ${version}, deploy-stage ${deploy_stage}, build .zip ${env:build_zip_package}"
+    - New-Item -ItemType Directory -Force -Path ${BUILD_INSTALL_FOLDER} # necessary because not part of git repo
+    - |
+      $env:GitLabEnvFile=".gitlab_ci_env"
+      if (Test-Path "$env:GitLabEnvFile") {
+          Remove-Item "$env:GitLabEnvFile" -Force
+      }
+      Get-Childitem -Path Env:CI* | ForEach-Object {
+          $KeyValue = $_.Key + '="' + $_.Value.Replace("`n","\n") + '"'
+          Add-Content -Path $env:GitLabEnvFile -Value $KeyValue
+      }
+      Get-Childitem -Path Env:GITLAB_* | ForEach-Object {
+          $KeyValue = $_.Key + '="' + $_.Value.Replace("`n","\n") + '"'
+          Add-Content -Path $env:GitLabEnvFile -Value $KeyValue
+      }
+    - powershell.exe -NoLogo -ExecutionPolicy Bypass -f ./build.ps1  
+    - |
+      if ( ${env:with_package} -ne "True" ) { 
+        Write-Host "Package generation set to ${env:with_package}. Exiting ..."
+        exit 0
+      }
+    - |
+      if (  ${env:with_models} -eq "True" ) {
+        curl.exe -H "X-JFrog-Art-Api:${OSEP_ARTIFACTORY_API_KEY}" -o ./install/models.zip "${artifactory_url}/artifactory/${artifactory_hpl_repo}/models-5.zip"
+        7z x .\install\models.zip -oinstall/
+      }
+    - powershell.exe -NoLogo -ExecutionPolicy Bypass -f .\install\exe_generation-ci.ps1
+  rules:
+    - if: $CI_MERGE_REQUEST_ID
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_BRANCH =~ /.+[_-]ci$/i  # commit branch name ends with "_ci/-ci" (case-insensitive)
+    - if: $CI_COMMIT_BRANCH =~ /^release\/.*$/
+    - if: $WITH_COVERAGE
+    - if: $CI_COMMIT_BRANCH =~ /.*Sprint.*/
+    - if: $CI_COMMIT_BRANCH =~ "/^HPL_Development.*/"
+    - if: $CI_COMMIT_BRANCH =~ "/^HPL_Blackwell_Support.*/"
+
+
+hip-planning-build:
+  extends: .build-on-windows-template
+  stage: Build and Test
+  variables:
+    config: ${CONFIGURATION}
+    with_package: "True"
+    with_models: "False"
+  dependencies:
+    - hip-planning-coverage
+    - vault
+  before_script:
+    #! powershell
+    - |
+      if (${env:CI_MERGE_REQUEST_EVENT_TYPE} -eq "merged_result" ) {
+        Write-Host "Running Sonar scanner because this is a merged result pipeline"
+        $env:with_sonar_scanner = "True"
+      }
+
+      if (${env:CI_MERGE_REQUEST_EVENT_TYPE} -eq "merge_train") {
+        Write-Host "Running Sonar scanner because this is a merge train pipeline"
+        $env:with_sonar_scanner = "True"
+      }
+
+      if (${env:WITH_COVERAGE} -eq "true" ) {
+        Write-Host "Running Sonar scanner because requested by WITH_COVERAGE variable"
+        $env:with_sonar_scanner = "True"
+      }
+
+      if (${env:CI_COMMIT_BRANCH} -eq "main" -or ${env:CI_COMMIT_BRANCH} -match "^release.*$" ) {
+        Write-Host "Running Sonar scanner because this is a special branch (main, release branch)"
+        $env:with_sonar_scanner = "True"
+      }
+
+      $env:with_sonar_scanner = "False"
+
+      # build installer for commits to main
+    - ${env:build_zip_package} = If ((${CI_COMMIT_BRANCH} -eq "main") -or (${CI_COMMIT_BRANCH} -match "^release.*$")) {1} Else {0}
+      # $DEPLOY_STAGE can be given by gitlab-ui: 'snapshot' or 'stable'
+    - $deploy_stage = If (${DEPLOY_STAGE}) {${DEPLOY_STAGE}} Else {${DEFAULT_DEPLOY_STAGE}}
+
+    - if ($env:with_sonar_scanner -eq "True") { git fetch --unshallow; } # for Sonarqube's branch analysis
+  rules:
+    - when: never
+    
+
+####################################################################################################
+# CREATE DOCUMENTATION
+####################################################################################################
+
+hip-planning-api-doc:
+  extends: .create-documentation-template
+  stage: Create Documentation
+  variables:
+    config: ${CONFIGURATION}
+  needs:
+    - job: hip-planning-build
+      artifacts: false
+
+hip-planning-sdd-doc:
+  extends: .create-documentation-template
+  stage: Create Documentation
+  variables:
+    config:     ${CONFIGURATION}
+    config_sdd: ${CONFIGURATION}_sdd
+  rules:
+    - if: '$CI_MERGE_REQUEST_ID || $CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH =~ /.+[_-]ci$/i || $CI_COMMIT_BRANCH =~ /^release\/.*$/'  # commit branch name ends with "_ci/-ci" (case-insensitive)
+      exists: # AND
+        - doxygen/hip_planning_sdd.doxyvars
+  needs:
+    - job: hip-planning-build
+      artifacts: false
+
+
+####################################################################################################
+# DEPLOY IN CLOUD
+####################################################################################################
+
+hip-planning-portable-cloud-deploy:
+  extends:
+    - .portable-deploy-template
+    - .cloud-deploy-template
+  stage: Deploy in Cloud
+  variables:
+    config: ${CONFIGURATION}
+  dependencies:
+    - hip-planning-build
+
+hip-planning-cloud-deploy:
+  extends:
+    - .deploy-base-template
+    - .cloud-deploy-template
+  stage: Deploy in Cloud
+  variables:
+    config: ${CONFIGURATION}
+  dependencies:
+    - hip-planning-build
+
+
+####################################################################################################
+# DEPLOY ON PREMISE
+####################################################################################################
+
+hip-planning-portable-on-prem-deploy:
+  extends:
+    - .portable-deploy-template
+    - .on-prem-deploy-template
+  stage: Deploy on Premise
+  variables:
+    config: ${CONFIGURATION}
+  dependencies:
+    - hip-planning-build
+
+hip-planning-on-prem-deploy:
+  extends:
+    - .deploy-base-template
+    - .on-prem-deploy-template
+  stage: Deploy on Premise
+  variables:
+    config: ${CONFIGURATION}
+  dependencies:
+    - hip-planning-build
+
+
+
+####################################################################################################
+# PUBLISH DOCUMENTATION
+####################################################################################################
+
+pages:
+  stage: Publish Documentation
+  tags:
+    - docker
+    - linux
+    - stryker
+  image: $DOCKER_LINUX_ANNIE_IMAGE
+  script:
+    #!/bin/bash
+    - mkdir public
+    - cp -R ${DOCUMENTATION_OUTPUT_PATH}/* public
+  artifacts:
+    paths:
+      - public
+  dependencies:
+    - hip-planning-api-doc
+    - hip-planning-sdd-doc
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+
+
+
+####################################################################################################
+# TEMPLATES
+####################################################################################################
+
+### WINDOWS BUILD AND TEST
+.build-on-windows-template:
+  tags:
+    - docker-for-windows
+    - stryker
+    - ltsc2022
+  timeout: 4h
+  variables:
+    GIT_STRATEGY:                   clone
+    GIT_SUBMODULE_STRATEGY:         recursive
+    build_dir:                      c:/build
+    build_type:                     release
+    compiler:                       msvc15
+    link_type:                      shared
+    with_coverage:                  "False"
+    with_package:                   "True"
+    with_sonar_scanner:             "False"
+    with_tests:                     "False"
+    with_models:                    "False"
+    docker_build_image:             artifactory.osep.stryker.com/osep-docker-dev/strykercorp/osep/osep-build-tools/osep-cpp-build-tools:msvc15-server-ltsc2022-annie
+    is_ci_build:                    1
+    git_commit:                     ${CI_COMMIT_SHORT_SHA}
+    git_branch:                     ${CI_COMMIT_BRANCH}
+    imageproclib_test_output_file:  ${CI_PROJECT_DIR}/${CPPUNIT_TEST_OUTPUT_PATH}/imageproclib_ext.test.results.xml
+    workdir:                        c:/src
+    installer_base_name:            "OS3DHipPlanningSetup"
+    artifactory_url:                https://artifactory.osep.stryker.com
+    artifactory_hpl_repo:           robotics-maven-dev/com/strykercorp/windows/x86_64/Hip_Planning
+
+  before_script:
+    #! powershell
+      # build installer for commits to main
+    - ${env:build_zip_package} = If ((${CI_COMMIT_BRANCH} -eq "main") -or (${CI_COMMIT_BRANCH} -match "^release.*$")) {1} Else {0}
+      # $DEPLOY_STAGE can be given by gitlab-ui: 'snapshot' or 'stable'
+    - $deploy_stage = If (${DEPLOY_STAGE}) {${DEPLOY_STAGE}} Else {${DEFAULT_DEPLOY_STAGE}}
+  script: # run docker image
+    #! powershell
+    - |
+      Write-Host "Build_stages set to ${env:Build_Stage}"
+      if ( ${env:Build_Stage} -eq "Production" ) {
+        ${env:with_package} = "True"
+        ${env:with_models} = "True" 
+      } elseif ( ${env:Build_Stage} -eq "Engineering" ) {
+        ${env:with_package} = "True"
+      }
+      Write-Host "with_package: ${env:with_package} and  with_models: ${env:with_models}"
+    - $version = Get-Content -Path ${CI_PROJECT_DIR}/VERSION -TotalCount 1
+    - Write-Host "building ${config}, version ${version}, deploy-stage ${deploy_stage}, build .zip ${env:build_zip_package}"
+    - New-Item -ItemType Directory -Force -Path ${BUILD_INSTALL_FOLDER} # necessary because not part of git repo
+    - |
+      $env:GitLabEnvFile=".gitlab_ci_env"
+      if (Test-Path "$env:GitLabEnvFile") {
+          Remove-Item "$env:GitLabEnvFile" -Force
+      }
+      Get-Childitem -Path Env:CI* | ForEach-Object {
+          $KeyValue = $_.Key + '="' + $_.Value.Replace("`n","\n") + '"'
+          Add-Content -Path $env:GitLabEnvFile -Value $KeyValue
+      }
+      Get-Childitem -Path Env:GITLAB_* | ForEach-Object {
+          $KeyValue = $_.Key + '="' + $_.Value.Replace("`n","\n") + '"'
+          Add-Content -Path $env:GitLabEnvFile -Value $KeyValue
+      }
+      #pwd
+      #Write-Host "---- $env:GitLabEnvFile contains:"
+      #type $env:GitLabEnvFile
+      #Write-Host "----"
+      docker login --username ${ARTIFACTORY_STRYKER_USER} --password ${ARTIFACTORY_STRYKER_KEY} artifactory.osep.stryker.com/robotics-docker-dev
+    - docker run --rm
+                 -w ${workdir}
+                 -v ${CI_PROJECT_DIR}:${workdir}
+                 --env-file ${env:GitLabEnvFile}
+                 -e architecture=${ARCHITECTURE}
+                 -e SONAR_HOST_URL
+                 -e SONAR_AUTH_TOKEN
+                 -e SONAR_ORGANIZATION
+                 -e SONAR_PROJECT_NAME="geomod:hip-planning"
+                 -e build_dir
+                 -e build_type
+                 -e compiler
+                 -e config
+                 -e link_type
+                 -e system=${SYSTEM}
+                 -e with_coverage
+                 -e with_package
+                 -e with_sonar_scanner
+                 -e with_tests
+                 -e build_zip_package
+                 -e IS_CI_BUILD=${is_ci_build}
+                 -e GIT_COMMIT=${git_commit}
+                 -e GIT_BRANCH=${git_branch}
+                 -e IMAGEPROCLIB_EXT_TEST_XML_OUTPUT_FILE=${imageproclib_test_output_file}
+                 -e DEPLOY_STAGE=${deploy_stage}
+                 -m 8g
+                 ${docker_build_image}
+                 powershell.exe -NoLogo -ExecutionPolicy Bypass -f ./build.ps1
+    - |
+      if ( ${env:with_package} -ne "True" ) { 
+        Write-Host "Package generation set to ${env:with_package}. Exiting ..."
+        exit 0
+      }
+    - |
+      if (  ${env:with_models} -eq "True" ) {
+        curl.exe -H "X-JFrog-Art-Api:${OSEP_ARTIFACTORY_API_KEY}" -o ./install/models.zip "${artifactory_url}/artifactory/${artifactory_hpl_repo}/models-5.zip"
+        7z x .\install\models.zip -oinstall/
+      }
+    - docker run --rm -w ${workdir} -v ${CI_PROJECT_DIR}:${workdir} 
+                           -e with_models 
+                           -e USR=${ARTIFACTORY_STRYKER_USER} 
+                           -e PSSWD=${ARTIFACTORY_STRYKER_KEY} 
+                           -e installer_base_name
+                           -e artifactory_url
+                           -e artifactory_hpl_repo
+                           -e CI_PIPELINE_ID
+                           -e Build_Stage
+                           ${docker_build_image} 
+                           powershell.exe -NoLogo -ExecutionPolicy Bypass -f .\install\exe_generation-ci.ps1
+    
+  after_script:
+    #! powershell
+    - |
+      if ( ${env:Build_Stage} -eq "Compilation" ) { exit 0 }
+      $upload_location=If( ${CI_JOB_STATUS} -eq "success" ) { "${env:artifactory_url}/artifactory/${env:artifactory_hpl_repo}/${env:Build_Stage}/${CI_PIPELINE_ID}/${installer_base_name}-$(cat VERSION).zip" }
+      $message="
+      <b>Pipeline Id:</b> ${CI_PIPELINE_ID}<br>
+      <b>Status:     </b> ${CI_JOB_STATUS}<br>
+      <b>BuildType:  </b> ${env:Build_Stage}<br>
+      <b>User:       </b> ${GITLAB_USER_NAME}<br>
+      <b>Commit:     </b> ${CI_COMMIT_MESSAGE}<br>
+      <b>Logs:       </b> <a href=${CI_JOB_URL}>${CI_JOB_URL}</a> <br>
+      <b>Download:   </b> ${upload_location}"
+      Write-Host "Notification message: ${message}"
+      curl -Uri $webhookUrl -Method Post -ContentType "application/json" -Body (@{text = $message} | ConvertTo-Json) -UseBasicParsing
+
+  rules:
+    #- if: $CI_MERGE_REQUEST_ID
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_BRANCH =~ /.+[_-]ci$/i  # commit branch name ends with "_ci/-ci" (case-insensitive)
+    - if: $CI_COMMIT_BRANCH =~ /^release\/.*$/
+    - if: $WITH_COVERAGE
+    - if: $CI_COMMIT_BRANCH =~ /.*Sprint.*/
+    - if: $CI_COMMIT_BRANCH =~ "/^HPL_Development.*/"
+    - if: $CI_COMMIT_BRANCH =~ "/^HPL_Blackwell_Support.*/"
+
+
+### CREATE DOCUMENTATION
+.create-documentation-template:
+  tags:
+    - docker
+    - linux
+    - stryker
+  timeout: 30m
+  image: docker:stable
+  variables:
+    docker_build_image: hip-planning-docs:${config}
+  services:
+    - docker:dind
+  before_script:
+    #!/bin/bash
+    - version=$(cat ${CI_PROJECT_DIR}/VERSION)
+    - echo building docker doc-image for ${config}
+    - docker build -f ${DOCKER_LINUX_DOC_FILE} --tag ${docker_build_image} .
+  script:
+    #!/bin/bash
+    - echo building ${config} documentation, version ${version}
+    - DOC_VERSION=${version}
+    - docker login --username ${ARTIFACTORY_STRYKER_USER} --password ${ARTIFACTORY_STRYKER_KEY} artifactory.osep.stryker.com/robotics-docker-dev
+    - docker run --rm
+                 --volume ${CI_PROJECT_DIR}:/src
+                 --workdir /src
+                 ${docker_build_image}
+                 /bin/bash -c "chmod +x build_docs.sh &&
+                               ./build_docs.sh ${config_sdd:-${config}}"
+  artifacts:
+    name: "$config-doc-$CI_COMMIT_SHORT_SHA"
+    paths:
+      - $DOCUMENTATION_OUTPUT_PATH/$config
+    expire_in: 1h
+    when: on_success
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_BRANCH =~ /.+[_-]ci$/i  # commit branch name ends with "_ci/-ci" (case-insensitive)
+    - if: $CI_COMMIT_BRANCH =~ /^release\/.*$/
+
+
+### DEPLOY
+.deploy-base-template:
+  extends: .maven-deploy-file
+  tags:
+    - docker
+    - linux
+    - stryker
+  variables:
+    artifactId:       ${config}
+    groupId:          ${DOMAIN}.${SYSTEM}.${ARCHITECTURE}
+    mavenSettings:    ${MAVEN_SETTINGS_XML_STRYKER}
+    packaging:        exe
+    generatePom:      "true"
+    packagePath:      ${CI_PROJECT_DIR}/${BUILD_INSTALL_FOLDER}/${config}.${packaging}
+  before_script:
+    - deploy_stage=${DEPLOY_STAGE:-${DEFAULT_DEPLOY_STAGE}}
+    - export version="$(cat ${CI_PROJECT_DIR}/VERSION)${portable}"
+    - | # deploy_stage^^ means "toupper"
+      if [ "${deploy_stage}" = "${DEFAULT_DEPLOY_STAGE}" ]; then
+        export version="${version}-${deploy_stage^^}"
+      fi
+    - echo deploying ${config}, version ${version}, repository ${repositoryUrl}
+  rules:
+    - if: $CI_COMMIT_BRANCH == "master"
+    - if: $CI_COMMIT_BRANCH =~ /^release\/.*$/
+
+.portable-deploy-template:
+  extends: .deploy-base-template
+  variables:
+    packaging:  zip
+    portable:   -PORTABLE
+
+.cloud-deploy-template:
+  variables:
+    repositoryUrl:    $ARTIFACTORY_HOST/robotics-maven-dev
+    mavenSettings:    $MAVEN_SETTINGS_XML
+
+.on-prem-deploy-template:
+  variables:
+    repositoryUrl:    $ARTIFACTORY_HOST_STRYKER/stable
+    mavenSettings:    $MAVEN_SETTINGS_XML_STRYKER
