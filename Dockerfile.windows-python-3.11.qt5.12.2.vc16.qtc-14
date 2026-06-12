@@ -1,0 +1,159 @@
+# escape=`
+##################################################################################################
+##### Please use this Dockerfile to create new docker image with required tools and dependencies
+##### to fix The container operating system does not match the host operating system.
+##################################################################################################
+FROM artifactory.osep.stryker.com/robotics-docker-dev/voyager/voyager-perforce:0.0.17-windows
+
+SHELL ["powershell.exe", "-ExecutionPolicy", "Bypass", "-Command"]
+
+ARG ARTIFACTORY_USER
+ARG ARTIFACTORY_KEY
+ARG QTCREATOR_VERSION="4.14.3"
+ARG QT_VERSION="5.15.2"
+ARG QT_INSTALL_DIR="C:/Programs/Qt"
+ARG QTCREATOR_INSTALL_DIR="C:/Programs/QtCreator"
+
+ENV ARTIFACTORY_USER=${ARTIFACTORY_USER}
+ENV ARTIFACTORY_KEY=${ARTIFACTORY_KEY}
+ENV QTCREATOR_VERSION=${QTCREATOR_VERSION}
+ENV QT_VERSION=${QT_VERSION}
+ENV QT_INSTALL_DIR=${QT_INSTALL_DIR}
+ENV QTCREATOR_INSTALL_DIR=${QTCREATOR_INSTALL_DIR}
+
+# ============================================================
+# Fix Chocolatey Artifactory source credentials
+# ============================================================
+RUN choco source add --name=artifactory --source=https://artifactory.osep.stryker.com/artifactory/api/nuget/v2/chocolatey-org --user=$env:ARTIFACTORY_USER --password=$env:ARTIFACTORY_KEY --priority=1 --force; choco source list
+
+# ============================================================
+# # Install VS 2019 Build Tools + v14.2 (MSVC 14.2) toolset component
+# ============================================================
+
+RUN Invoke-WebRequest `
+    -Uri "https://aka.ms/vs/16/release/vs_buildtools.exe" `
+    -OutFile "C:\temp\vs_buildtools.exe"; `
+    Start-Process `
+        -FilePath "C:\temp\vs_buildtools.exe" `
+        -ArgumentList "--quiet --wait --norestart --nocache --installPath C:\Programs\mvs16 --add Microsoft.VisualStudio.Workload.VCTools --add Microsoft.VisualStudio.Component.VC.Tools.x86.x64 --add Microsoft.VisualStudio.Component.Windows10SDK.19041" `
+        -Wait; `
+    Remove-Item "C:\temp\vs_buildtools.exe" -Force
+
+# ============================================================
+# Install python 2.7.16
+# ============================================================
+RUN choco install -y --no-progress python2 --version 2.7.16 --force
+RUN py -2.7 --version
+RUN py -3.11 -m pip install --upgrade pip
+RUN py -3.11 -m pip install aqtinstall
+RUN py -3.11 -m aqt --help
+RUN py -3.11 -m aqt list-qt windows desktop
+# ============================================================
+# Install Qt 5.15.2 for MSVC 2019 x64
+# Qt's msvc2019_64 binaries are ABI-compatible with v14.2 toolset
+# installed via VS 2019
+# ============================================================
+RUN New-Item -ItemType Directory -Force -Path $env:QT_INSTALL_DIR | Out-Null; py -3.11 -m aqt install-qt --outputdir $env:QT_INSTALL_DIR windows desktop $env:QT_VERSION win64_msvc2019_64
+
+# Perforce — already in base image, verify only
+# ============================================================
+RUN p4 -V
+
+# Verify qmake and add to PATH
+RUN $qmake = (Get-ChildItem -Path $env:QT_INSTALL_DIR -Recurse -Filter 'qmake.exe' | Select-Object -First 1).DirectoryName; if (-not $qmake) { throw 'qmake.exe not found after Qt install' }; [Environment]::SetEnvironmentVariable('PATH', $env:PATH + ';' + $qmake, [EnvironmentVariableTarget]::Machine)
+
+RUN qmake --version
+
+# ============================================================
+# Install Qt Creator 4.14.3 from Artifactory
+# ============================================================
+RUN New-Item -ItemType Directory -Force -Path C:/temp | Out-Null; $url = 'https://artifactory.osep.stryker.com/artifactory/robotics-maven-dev/com/strykercorp/windows/x86_64/QtCreator-StrykerEdition/' + $env:QTCREATOR_VERSION + '/QtCreator-StrykerEdition-' + $env:QTCREATOR_VERSION + '.exe'; Write-Host ('Downloading QtCreator from ' + $url); curl.exe --fail --silent --show-error -H ('X-JFrog-Art-Api:' + $env:ARTIFACTORY_KEY) -o C:/temp/qtcreator.exe $url; if ($LASTEXITCODE -ne 0) { throw ('curl failed with exit code ' + $LASTEXITCODE) }
+# escape=`
+##################################################################################################
+##### Please use this Dockerfile to create new docker image with required tools and dependencies
+##### to fix The container operating system does not match the host operating system.
+##################################################################################################
+FROM artifactory.osep.stryker.com/robotics-docker-dev/voyager/voyager-perforce:0.0.17-windows
+
+SHELL ["powershell.exe", "-ExecutionPolicy", "Bypass", "-Command"]
+
+ARG ARTIFACTORY_USER
+ARG ARTIFACTORY_KEY
+ARG QTCREATOR_VERSION="4.14.3"
+ARG QT_VERSION="5.15.2"
+ARG QT_INSTALL_DIR="C:/Programs/Qt"
+ARG QTCREATOR_INSTALL_DIR="C:/Programs/QtCreator"
+
+ENV ARTIFACTORY_USER=${ARTIFACTORY_USER}
+ENV ARTIFACTORY_KEY=${ARTIFACTORY_KEY}
+ENV QTCREATOR_VERSION=${QTCREATOR_VERSION}
+ENV QT_VERSION=${QT_VERSION}
+ENV QT_INSTALL_DIR=${QT_INSTALL_DIR}
+ENV QTCREATOR_INSTALL_DIR=${QTCREATOR_INSTALL_DIR}
+
+# ============================================================
+# Fix Chocolatey Artifactory source credentials
+# ============================================================
+RUN choco source add --name=artifactory --source=https://artifactory.osep.stryker.com/artifactory/api/nuget/v2/chocolatey-org --user=$env:ARTIFACTORY_USER --password=$env:ARTIFACTORY_KEY --priority=1 --force; choco source list
+
+# ============================================================
+# # Install VS 2019 Build Tools + v14.2 (MSVC 14.2) toolset component
+# ============================================================
+
+RUN Invoke-WebRequest `
+    -Uri "https://aka.ms/vs/16/release/vs_buildtools.exe" `
+    -OutFile "C:\temp\vs_buildtools.exe"; `
+    Start-Process `
+        -FilePath "C:\temp\vs_buildtools.exe" `
+        -ArgumentList "--quiet --wait --norestart --nocache --installPath C:\Programs\mvs16 --add Microsoft.VisualStudio.Workload.VCTools --add Microsoft.VisualStudio.Component.VC.Tools.x86.x64 --add Microsoft.VisualStudio.Component.Windows10SDK.19041" `
+        -Wait; `
+    Remove-Item "C:\temp\vs_buildtools.exe" -Force
+
+# ============================================================
+# Install python 2.7.16
+# ============================================================
+RUN choco install -y --no-progress python2 --version 2.7.16 --force
+RUN py -2.7 --version
+RUN py -3.11 -m pip install --upgrade pip
+RUN py -3.11 -m pip install aqtinstall
+RUN py -3.11 -m aqt --help
+RUN py -3.11 -m aqt list-qt windows desktop
+# ============================================================
+# Install Qt 5.15.2 for MSVC 2019 x64
+# Qt's msvc2019_64 binaries are ABI-compatible with v14.2 toolset
+# installed via VS 2019
+# ============================================================
+RUN New-Item -ItemType Directory -Force -Path $env:QT_INSTALL_DIR | Out-Null; py -3.11 -m aqt install-qt --outputdir $env:QT_INSTALL_DIR windows desktop $env:QT_VERSION win64_msvc2019_64
+
+# Perforce — already in base image, verify only
+# ============================================================
+RUN p4 -V
+
+# Verify qmake and add to PATH
+RUN $qmake = (Get-ChildItem -Path $env:QT_INSTALL_DIR -Recurse -Filter 'qmake.exe' | Select-Object -First 1).DirectoryName; if (-not $qmake) { throw 'qmake.exe not found after Qt install' }; [Environment]::SetEnvironmentVariable('PATH', $env:PATH + ';' + $qmake, [EnvironmentVariableTarget]::Machine)
+
+RUN qmake --version
+
+# ============================================================
+# Install Qt Creator 4.14.3 from Artifactory
+# ============================================================
+RUN New-Item -ItemType Directory -Force -Path C:/temp | Out-Null; $url = 'https://artifactory.osep.stryker.com/artifactory/robotics-maven-dev/com/strykercorp/windows/x86_64/QtCreator-StrykerEdition/' + $env:QTCREATOR_VERSION + '/QtCreator-StrykerEdition-' + $env:QTCREATOR_VERSION + '.exe'; Write-Host ('Downloading QtCreator from ' + $url); curl.exe --fail --silent --show-error -H ('X-JFrog-Art-Api:' + $env:ARTIFACTORY_KEY) -o C:/temp/qtcreator.exe $url; if ($LASTEXITCODE -ne 0) { throw ('curl failed with exit code ' + $LASTEXITCODE) }
+
+RUN New-Item -ItemType Directory -Force -Path $env:QTCREATOR_INSTALL_DIR | Out-Null; Start-Process -FilePath C:/temp/qtcreator.exe -ArgumentList '/quiet', '/norestart', ('INSTALLDIR=' + $env:QTCREATOR_INSTALL_DIR) -Wait -NoNewWindow; Remove-Item C:/temp/qtcreator.exe -Force
+
+# Add Qt Creator to PATH
+RUN [Environment]::SetEnvironmentVariable('PATH', $env:PATH + ';' + $env:QTCREATOR_INSTALL_DIR + '\bin', [EnvironmentVariableTarget]::Machine)
+
+# ============================================================
+# Set v14.2 environment variables (VS 2019 paths hosting v14.2)
+# ============================================================
+RUN [Environment]::SetEnvironmentVariable('VSINSTALLDIR', 'C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\', [EnvironmentVariableTarget]::Machine)
+RUN [Environment]::SetEnvironmentVariable('VS16COMNTOOLS', 'C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\Tools\', [EnvironmentVariableTarget]::Machine)
+
+# ============================================================
+# Cleanup
+# ============================================================
+RUN if (Test-Path C:/temp) { Remove-Item -Recurse -Force C:/temp }
+
+SHELL ["cmd", "/S", "/C"]
+CMD ["powershell.exe"]
