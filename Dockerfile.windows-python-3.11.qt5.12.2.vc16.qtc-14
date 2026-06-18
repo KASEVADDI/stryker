@@ -2,6 +2,8 @@
 ##################################################################################################
 ##### Please use this Dockerfile to create new docker image with required tools and dependencies
 ##### to fix The container operating system does not match the host operating system.
+##### please refer below Jfrog link to find suitable docker images
+##### https://artifactory.osep.stryker.com/ui/repos/tree/General/docker-dev/qbs-build-tools
 ##################################################################################################
 FROM artifactory.osep.stryker.com/robotics-docker-dev/voyager/voyager-perforce:0.0.17-windows
 
