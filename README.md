@@ -6,6 +6,7 @@
 
 <img width="1892" height="960" alt="chat_bot_metrics_dashboard_UI" src="https://github.com/user-attachments/assets/d957a1eb-def2-4408-8105-85370ae3c343" />
 
+<img width="1877" height="918" alt="image-1" src="https://github.com/user-attachments/assets/664ab3f1-c0ee-4668-8504-37b57aece747" />
 
 
 Based on above architecture diagrams, the request flow for the chatbot application is as follows:
