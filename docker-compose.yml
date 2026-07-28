@@ -1,0 +1,152 @@
+services:
+  # Flask Dashboard Service
+  flask-dashboard:
+    build:
+      context: ./services/flask-dashboard
+      dockerfile: Dockerfile
+    container_name: smart-dashboard
+    ports:
+      - "3000:3000"
+      - "3001:3000"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      FLASK_PORT: 3000
+      DEBUG_MODE: "False"
+      
+      # Database
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_USER: ${MYSQL_USER:-root}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-smartchatbox}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-THA6}
+      
+      # Chatbot Service
+      CHATBOT_SERVICE_URL: http://chatbot-service:5000
+      
+      # App
+      APP_VERSION: 4.0.0
+      PYTHONUNBUFFERED: 1
+    volumes:
+      - ./files:/app/files
+      - ./data:/app/data
+      - ./chatbox:/app/chatbox
+      - ./business_intelligence:/app/business_intelligence
+    networks:
+      - chatbox-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/app/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Chatbot Microservice (AI + RAG)
+  chatbot-service:
+    build:
+      context: ./services/chatbot
+      dockerfile: Dockerfile
+    container_name: smart-chatbot-service
+    ports:
+      - "5000:5000"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      chromadb:
+        condition: service_started
+    environment:
+      CHATBOT_PORT: 5000
+      DEBUG_MODE: "True"
+      LOG_LEVEL: "INFO"
+      
+      # Database
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_USER: ${MYSQL_USER:-root}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-smartchatbox}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-THA6}
+      
+      # ChromaDB
+      CHROMADB_HOST: chromadb
+      CHROMADB_PORT: 8000
+      
+      # Ollama (Remote)
+      OLLAMA_HOST: ${OLLAMA_HOST:-http://localhost:11434}
+      
+      # Features
+      ENABLE_DOCUMENT_CHAT: ${ENABLE_DOCUMENT_CHAT:-1}
+      ENABLE_SMART_CHAT: ${ENABLE_SMART_CHAT:-1}
+      
+      # App
+      APP_VERSION: 4.0.0
+      PYTHONUNBUFFERED: 1
+    volumes:
+      - ./files:/app/files
+      - ./data:/app/data
+      - ./chatbox:/app/chatbox
+      - ./business_intelligence:/app/business_intelligence
+    networks:
+      - chatbox-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # MySQL Database (Shared)
+  mysql:
+    image: mysql:8.0
+    container_name: smart-mysql
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-smartchatbox}
+      MYSQL_USER: ${MYSQL_USER:-chatbox}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-smartchatbox}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-THA6}
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./dockerize_application/init-db.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - chatbox-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ChromaDB Vector Database (Shared)
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: smart-chromadb
+    ports:
+      - "8000:8000"
+    volumes:
+      - chromadb_data:/chroma/data
+    environment:
+      CHROMA_HOST: 0.0.0.0
+      CHROMA_PORT: 8000
+    networks:
+      - chatbox-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+networks:
+  chatbox-network:
+    driver: bridge
+
+volumes:
+  mysql_data:
+    driver: local
+  chromadb_data:
+    driver: local
