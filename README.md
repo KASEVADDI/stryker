@@ -1,5 +1,10 @@
 **This README.md file represent microservice architecture software workflow: which has been migrated FROM Monolithic Architecture TO Microservices Architecture**
 
+##########################################################################
+## In this branch services folder and docker-compose.yml template were added
+## inside services folder chatbot and flaskdashboard chagnes are presented
+###########################################################################
+
 
 <img width="1536" height="1024" alt="ChatGPT Image Jul 27, 2026, 03_20_02 PM" src="https://github.com/user-attachments/assets/bec0b5ef-9a28-4d92-a31b-0e9586ecb548" />
 
