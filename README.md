@@ -4,6 +4,9 @@
 
 <img width="1579" height="996" alt="ChatGPT Image Jul 27, 2026, 12_45_16 PM" src="https://github.com/user-attachments/assets/df70ff0a-b9b0-4951-ac33-6ebc5635a80f" />
 
+<img width="1892" height="960" alt="chat_bot_metrics_dashboard_UI" src="https://github.com/user-attachments/assets/d957a1eb-def2-4408-8105-85370ae3c343" />
+
+
 
 Based on above architecture diagrams, the request flow for the chatbot application is as follows:
 
