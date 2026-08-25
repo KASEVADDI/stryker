@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.strykercorp.windows.x86_64.msvc15</groupId>
+  <artifactId>impseg</artifactId>
+  <version>38.0.2</version>
+  <dependencies>
+    <dependency>
+      <groupId>com.strykercorp.windows.x86_64.msvc15</groupId>
+      <artifactId>tensorrt</artifactId>
+      <version>11.10.1</version>
+      <type>zip</type>
+    </dependency>
+  </dependencies>
+</project>
